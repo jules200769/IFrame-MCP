@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Nested</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f7fbff; color: #123; padding: 12px 14px; }
+  button { cursor: pointer; padding: 8px 14px; border-radius: 6px; background: #123; color: #fff; border: 0; font: inherit; }
+  p { margin: 0 0 8px; font-size: 13px; color: #456; }
+</style>
+</head>
+<body>
+  <p>Kind-frame in de weerapp.</p>
+  <button type="button" id="nestedBtn">In nested</button>
+<script>
+  document.getElementById('nestedBtn').addEventListener('click', () => {
+    parent.postMessage({ type: 'nested-click' }, '*');
+  });
+</script>
+</body>
+</html>

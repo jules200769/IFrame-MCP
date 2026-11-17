@@ -64,6 +64,8 @@ export async function act(session, { ref, action = 'click', value }) {
       switch (action) {
         case 'click':
         case 'dblclick': {
+          const disabled = await el.evaluate((e) => !!(e.disabled || e.getAttribute('aria-disabled') === 'true')).catch(() => false);
+          if (disabled) return `${action} overgeslagen: ${ref} is uitgeschakeld`;
           const opts = action === 'dblclick' ? { clickCount: 2 } : {};
           // Invisible or covered controls (accessibility layers under/over drawn shapes):
           // click their centre straight away instead of waiting for Playwright's checks.
@@ -123,10 +125,38 @@ export async function act(session, { ref, action = 'click', value }) {
   }
 }
 
+// Snapshot coordinates can sit below the fold, inside a scrolled iframe.
+// Scroll the frame that owns the point until it lies in the viewport, then click there.
+async function revealPoint(session, x, y) {
+  const page = await session.currentPage();
+  const vp = await page.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+  let cy = y;
+  const frames = await session.frames();
+  frames.sort((a, b) => a.depth - b.depth);
+  for (const f of frames) {
+    const box = f.depth === 0 ? { x: 0, y: 0, width: vp.w, height: vp.h } : await session.frameBox(f.frame);
+    if (!box?.width) continue;
+    if (x < box.x - 2 || x > box.x + box.width + 2) continue;
+    const limit = Math.min(box.y + box.height, vp.h) - 24;
+    const top = Math.max(box.y, 0) + 24;
+    if (cy >= top && cy <= limit) continue;
+    const delta = cy - (cy > limit ? limit : top);
+    const moved = await f.frame.evaluate((dy) => {
+      const before = window.scrollY;
+      window.scrollBy(0, dy);
+      return window.scrollY - before;
+    }, delta).catch(() => 0);
+    cy -= moved;
+  }
+  return { x, y: Math.round(cy) };
+}
+
 export function clickXY(session, { x, y, double = false }) {
   return withOutcome(session, async (page) => {
-    await page.mouse.click(x, y, double ? { clickCount: 2 } : {});
-    return `klik met echte muisinvoer op coördinaat ${x},${y}`;
+    const at = await revealPoint(session, x, y);
+    await page.mouse.click(at.x, at.y, double ? { clickCount: 2 } : {});
+    const scrolled = at.y !== Math.round(y) ? `; gescrold vanaf ${Math.round(x)},${Math.round(y)}` : '';
+    return `klik met echte muisinvoer op coördinaat ${at.x},${at.y}${scrolled}`;
   });
 }
 

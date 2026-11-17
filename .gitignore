@@ -1,3 +1,4 @@
 node_modules/
 .chrome-profile/
 .claude/settings.local.json
+buddy.config.json

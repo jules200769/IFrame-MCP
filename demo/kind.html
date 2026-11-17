@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Kind-frame</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f7fbff; color: #123; padding: 8px 12px; }
+  button { cursor: pointer; padding: 6px 12px; border-radius: 6px; background: #123; color: #fff; border: 0; font: inherit; }
+  span { font-size: 13px; color: #456; margin-left: 8px; }
+</style>
+</head>
+<body>
+  <button type="button" id="kindBtn"></button><span id="kindOut">Nog niet geklikt.</span>
+<script>
+  const label = new URLSearchParams(location.search).get('label') || 'Kind';
+  const btn = document.getElementById('kindBtn');
+  btn.textContent = label;
+  btn.addEventListener('click', (e) => {
+    if (!e.isTrusted) return;
+    document.getElementById('kindOut').textContent = `Geklikt: ${label}.`;
+  });
+</script>
+</body>
+</html>

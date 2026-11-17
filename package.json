@@ -8,11 +8,18 @@
     "chrome": "node scripts/start-chrome.js",
     "demo": "node demo/serve.js",
     "mcp": "node src/server.js",
+    "buddy": "node scripts/start-buddy.js",
+    "buddy:server": "node buddy/server.js",
+    "mcp:buddy": "node buddy/bridge-mcp.js",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\""
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "playwright-core": "^1.65.1",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "electron": "^45.3.4"
   }
 }

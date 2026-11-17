@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iframe-buddy</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <button id="bubble" class="bubble" title="Buddy openen (Ctrl+Shift+Space)" aria-label="Buddy openen">B</button>
+
+  <div id="panel" class="panel">
+    <header class="bar">
+      <span id="dot" class="dot" aria-hidden="true"></span>
+      <div class="title">
+        <strong>Buddy</strong>
+        <span id="status" class="status">verbinden…</span>
+      </div>
+      <button id="connect" class="link" hidden title="Opnieuw koppelen aan je Chrome (Chrome vraagt om toestemming)">Koppel</button>
+      <button id="settings" class="icon" title="Model kiezen" aria-label="Model kiezen" aria-expanded="false">⚙</button>
+      <button id="reset" class="icon" title="Nieuw gesprek" aria-label="Nieuw gesprek">⟲</button>
+      <button id="collapse" class="icon" title="Inklappen (Esc)" aria-label="Inklappen">–</button>
+    </header>
+    <nav class="modes" role="radiogroup" aria-label="Wat mag de buddy">
+      <button type="button" data-mode="kijken" role="radio" title="Alleen meekijken en uitleggen; de buddy klikt of typt niets">Kijken</button>
+      <button type="button" data-mode="vragen" role="radio" title="Elke klik of toets eerst aan jou vragen">Vragen</button>
+      <button type="button" data-mode="zelf" role="radio" title="De buddy voert acties direct uit">Zelf</button>
+    </nav>
+
+    <form id="modelForm" class="model" hidden>
+      <label>Model
+        <select id="preset"></select>
+      </label>
+      <label id="modelRow">Modelnaam <input id="model" autocomplete="off" spellcheck="false"></label>
+      <label id="baseRow">Server-URL <input id="baseUrl" autocomplete="off" spellcheck="false"></label>
+      <label id="keyRow">API-key <input id="apiKey" type="password" autocomplete="off" placeholder="leeg = huidige key of omgevingsvariabele"></label>
+      <label id="visionRow" class="check"><input id="vision" type="checkbox" checked> Model krijgt screenshots</label>
+      <label class="check"><input id="save" type="checkbox"> Onthouden in buddy.config.json</label>
+      <p id="modelHint" class="hint"></p>
+      <div class="row"><button type="submit">Gebruiken</button><button type="button" id="modelCancel" class="ghost">Annuleren</button></div>
+    </form>
+
+    <main id="log" class="log" aria-live="polite">
+      <p class="hint">Vraag iets over de app in je browser, bv. <em>"Kies Utrecht en ga naar morgen; controleer dat de app niet pauzeerde."</em></p>
+    </main>
+
+    <form id="form" class="composer">
+      <textarea id="input" rows="2" placeholder="Bericht aan de buddy… (Enter = versturen)" autocomplete="off"></textarea>
+      <button id="send" type="submit">Stuur</button>
+    </form>
+  </div>
+<script src="app.js"></script>
+</body>
+</html>

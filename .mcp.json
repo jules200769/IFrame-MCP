@@ -4,6 +4,10 @@
       "command": "node",
       "args": ["src/server.js"],
       "env": { "CDP_URL": "http://127.0.0.1:9222" }
+    },
+    "iframe-buddy": {
+      "command": "node",
+      "args": ["buddy/bridge-mcp.js"]
     }
   }
 }

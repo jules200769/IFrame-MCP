@@ -5,8 +5,10 @@
 function install(version) {
   // The helper outlives our server process (it lives in the page), so a page that is still
   // open can hold an older version. Replace it instead of keeping it.
+  // document.open()/write() (frames filled by their parent, old LMS wrappers) erases all
+  // window listeners but keeps window.__iframeAgent: then the helper is no longer alive.
   const old = window.__iframeAgent;
-  if (old && old.version === version) return;
+  if (old && old.version === version && (!old.alive || old.alive())) return;
   if (old && typeof old.dispose === 'function') old.dispose();
 
   const A = {
@@ -18,21 +20,46 @@ function install(version) {
     events: [],
   };
   const ac = new AbortController();
-  const on = (target, type, fn) => target.addEventListener(type, fn, { signal: ac.signal });
+  const on = (target, type, fn, opts) => target.addEventListener(type, fn, { ...opts, signal: ac.signal });
 
   const record = (type, extra = {}) => {
     A.events.push({ type, t: Date.now(), ...extra });
     if (A.events.length > 200) A.events.shift();
   };
-  // Window-level blur only (element blur does not bubble to a non-capturing window listener).
-  // Focus moving into one of our own iframes also blurs this window; that is not a pause.
-  on(window, 'blur', (e) => {
-    if (e.target !== window) return;
-    setTimeout(() => {
+  A._record = record;
+
+  // Installed once, before page scripts when we are the init script, and kept across
+  // helper upgrades. A listener added later cannot outrun the page's own blur handler:
+  // window blur listeners run in registration order, capture flag or not.
+  const guardAlive = () => {
+    let ok = false;
+    const probe = () => { ok = true; };
+    window.__iframeAgentGuardProbe = probe;
+    window.dispatchEvent(new Event('__iframe-agent-guard'));
+    delete window.__iframeAgentGuardProbe;
+    return ok;
+  };
+  if (!window.__iframeAgentBlurGuard || !guardAlive()) {
+    window.__iframeAgentBlurGuard = true;
+    window.addEventListener('__iframe-agent-guard', () => window.__iframeAgentGuardProbe && window.__iframeAgentGuardProbe());
+    window.addEventListener('blur', (e) => {
+      if (e.target !== window) return;
       const ae = document.activeElement;
-      record(ae && (ae.tagName === 'IFRAME' || ae.tagName === 'FRAME') ? 'focus-into-iframe' : 'window-blur');
-    }, 0);
-  });
+      const rec = window.__iframeAgent && window.__iframeAgent._record;
+      if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'FRAME')) {
+        if (rec) rec('focus-into-iframe');
+        e.stopImmediatePropagation();
+        return;
+      }
+      let toParent = false;
+      try {
+        toParent = window.parent !== window && parent.document.hasFocus();
+      } catch {
+        // Cross-origin parent: leaving this frame is a real blur for the app inside it.
+      }
+      if (rec) rec(toParent ? 'focus-to-parent' : 'window-blur');
+    }, true);
+  }
   on(window, 'focus', (e) => { if (e.target === window) record('window-focus'); });
   on(document, 'visibilitychange', () => record(document.hidden ? 'hidden' : 'visible'));
   on(window, 'pagehide', () => record('pagehide'));
@@ -42,6 +69,17 @@ function install(version) {
 
   const observer = new MutationObserver((list) => { A.mutations += list.length; });
   observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  let pinged = false;
+  on(window, '__iframe-agent-ping', () => { pinged = true; });
+  const ping = () => {
+    pinged = false;
+    window.dispatchEvent(new Event('__iframe-agent-ping'));
+    return pinged;
+  };
+  // In a frame with scripting disabled (sandbox without allow-scripts) listeners never run,
+  // although CDP can still evaluate. There "alive" only means: installed.
+  A.scripting = ping();
+  A.alive = () => !A.scripting || ping();
   A.dispose = () => {
     ac.abort();
     observer.disconnect();
@@ -74,6 +112,7 @@ function install(version) {
     if (tag === 'SELECT') return 'combobox';
     if (tag === 'TEXTAREA') return 'textbox';
     if (tag === 'IFRAME') return 'iframe';
+    if (tag === 'CANVAS') return 'canvas';
     if (tag === 'INPUT') {
       const t = (el.type || 'text').toLowerCase();
       if (['checkbox', 'radio', 'range', 'file', 'color', 'date'].includes(t)) return t;
@@ -118,13 +157,59 @@ function install(version) {
     const stack = [root];
     while (stack.length) {
       const node = stack.pop();
-      for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
-      if (node !== root) yield node;
-      if (node.shadowRoot) stack.push(node.shadowRoot);
+      // ShadowRoot is not an Element; only yield Elements to callers (getComputedStyle etc.).
+      if (node !== root && node.nodeType === 1) yield node;
+      if (node.nodeType === 1 || node.nodeType === 11) {
+        for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+      }
+      if (node.nodeType === 1 && node.shadowRoot) stack.push(node.shadowRoot);
     }
   }
 
+  // One element, or null when it is not something a user can operate.
+  // `hidden` keeps controls that are only in the DOM (display/0×0/visibility).
+  function describeElement(el, hidden = false) {
+    if (!el || el.nodeType !== 1 || !el.isConnected) return null;
+    const cs = getComputedStyle(el);
+    const pointer = cs.cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer');
+    const role = el.getAttribute('role');
+    const semantic =
+      INTERACTIVE_TAGS.has(el.tagName) ||
+      el.tagName === 'CANVAS' ||
+      (role && INTERACTIVE_ROLES.has(role)) ||
+      el.isContentEditable && (!el.parentElement || !el.parentElement.isContentEditable) ||
+      (el.hasAttribute('tabindex') && el.tabIndex >= 0) ||
+      el.hasAttribute('onclick');
+    if (!semantic && !pointer) return null;
+    if (el.tagName === 'INPUT' && el.type === 'hidden') return null;
+    const r = el.getBoundingClientRect();
+    const sized = r.width > 2 && r.height > 2;
+    const shown = el.checkVisibility ? el.checkVisibility({ visibilityProperty: true }) : cs.visibility !== 'hidden';
+    const opaque = el.checkVisibility ? el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : shown;
+    // Invisible (opacity 0) controls with a real size are typically an accessibility layer
+    // lying over drawn shapes (players like Storyline). They are the real click targets.
+    const overlay = sized && shown && !opaque && semantic;
+    const visible = sized && shown && opaque;
+    if (!visible && !overlay && !hidden) return null;
+    let why = null;
+    if (!visible && !overlay) {
+      const displayed = el.checkVisibility ? el.checkVisibility() : true;
+      why = !sized ? 'geen afmeting' : !displayed ? 'display' : !shown ? 'visibility' : !opaque ? 'opacity' : 'onbekend';
+    }
+    return {
+      why,
+      id: idOf(el),
+      role: roleOf(el, pointer),
+      name: nameOf(el),
+      state: stateOf(el),
+      rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+      hidden: !visible && !overlay,
+      overlay,
+    };
+  }
+
   // Elements that a user could interact with, including non-semantic ones of custom players.
+  // Closed shadow roots are invisible to this walk; the session adds those via CDP.
   function collect({ max = 150, hidden = false } = {}) {
     for (const [id, el] of A.refs) if (!el.isConnected) A.refs.delete(id);
     const items = [];
@@ -133,41 +218,8 @@ function install(version) {
     if (!root) return { items, truncated: false };
     for (const el of walk(root)) {
       if (++scanned > 8000 || items.length >= max) break;
-      const cs = getComputedStyle(el);
-      const pointer = cs.cursor === 'pointer' && (!el.parentElement || getComputedStyle(el.parentElement).cursor !== 'pointer');
-      const role = el.getAttribute('role');
-      const semantic =
-        INTERACTIVE_TAGS.has(el.tagName) ||
-        (role && INTERACTIVE_ROLES.has(role)) ||
-        el.isContentEditable && (!el.parentElement || !el.parentElement.isContentEditable) ||
-        (el.hasAttribute('tabindex') && el.tabIndex >= 0) ||
-        el.hasAttribute('onclick');
-      if (!semantic && !pointer) continue;
-      if (el.tagName === 'INPUT' && el.type === 'hidden') continue;
-      const r = el.getBoundingClientRect();
-      const sized = r.width > 2 && r.height > 2;
-      const shown = el.checkVisibility ? el.checkVisibility({ visibilityProperty: true }) : cs.visibility !== 'hidden';
-      const opaque = el.checkVisibility ? el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : shown;
-      // Invisible (opacity 0) controls with a real size are typically an accessibility layer
-      // lying over drawn shapes (players like Storyline). They are the real click targets.
-      const overlay = sized && shown && !opaque && semantic;
-      const visible = sized && shown && opaque;
-      if (!visible && !overlay && !hidden) continue;
-      let why = null;
-      if (!visible && !overlay) {
-        const displayed = el.checkVisibility ? el.checkVisibility() : true;
-        why = !sized ? 'geen afmeting' : !displayed ? 'display' : !shown ? 'visibility' : !opaque ? 'opacity' : 'onbekend';
-      }
-      items.push({
-        why,
-        id: idOf(el),
-        role: roleOf(el, pointer),
-        name: nameOf(el),
-        state: stateOf(el),
-        rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-        hidden: !visible && !overlay,
-        overlay,
-      });
+      const item = describeElement(el, hidden);
+      if (item) items.push(item);
     }
     return { items, truncated: items.length >= max };
   }
@@ -190,6 +242,7 @@ function install(version) {
   }
 
   A.collect = collect;
+  A.describeElement = (el, hidden) => describeElement(el, !!hidden);
   A.get = (id) => A.refs.get(id) || null;
   A.has = (id) => !!A.refs.get(id)?.isConnected;
   A.stateOfId = (id) => {
@@ -202,6 +255,7 @@ function install(version) {
     hasFocus: document.hasFocus(),
     hidden: document.hidden,
     fullscreen: !!document.fullscreenElement,
+    origin: self.origin,
   });
   const STATEFUL = 'input[type=checkbox],input[type=radio],select,[aria-checked],[aria-selected],[aria-pressed],[aria-expanded]';
 

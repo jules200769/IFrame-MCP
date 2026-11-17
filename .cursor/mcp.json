@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "iframe-agent": {
+      "command": "node",
+      "args": ["${workspaceFolder}/src/server.js"],
+      "env": {
+        "CDP_URL": "http://127.0.0.1:9222"
+      }
+    },
+    "iframe-buddy": {
+      "command": "node",
+      "args": ["${workspaceFolder}/buddy/bridge-mcp.js"]
+    }
+  }
+}

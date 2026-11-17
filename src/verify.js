@@ -122,7 +122,20 @@ export async function pauseEventsSince(session, since) {
       // ignore detached frames
     }
   }
-  return out;
+  return classifyFrameSwitches(out);
+}
+
+// A cross-origin frame cannot see where its focus went, so it records a plain window-blur
+// even when focus merely moved to another frame in the same tab (e.g. a sibling iframe that
+// was clicked). Seen from the tab, that is not a pause: another frame took focus right away.
+export function classifyFrameSwitches(events, windowMs = 500) {
+  return events.map((e) => {
+    if (e.type !== 'window-blur') return e;
+    const to = events.find(
+      (o) => o.frame !== e.frame && (o.type === 'window-focus' || o.type === 'focus-into-iframe') && o.t >= e.t - 50 && o.t <= e.t + windowMs,
+    );
+    return to ? { ...e, type: 'focus-to-frame', to: to.frame } : e;
+  });
 }
 
 export const isPause = (e) => PAUSE_EVENTS.has(e.type);

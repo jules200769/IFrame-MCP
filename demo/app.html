@@ -5,27 +5,52 @@
 <title>Weerapp</title>
 <style>
   body { margin: 0; font-family: system-ui, sans-serif; background: #eaf4ff; color: #123; }
-  .wrap { padding: 16px 20px; }
+  .wrap { padding: 16px 20px 40px; max-width: 720px; }
   h1 { margin: 0 0 4px; font-size: 22px; }
+  h2 { margin: 28px 0 8px; font-size: 18px; border-top: 1px solid #bcd; padding-top: 20px; }
+  h3 { margin: 0 0 8px; font-size: 14px; color: #345; }
   .status { font-size: 13px; color: #456; }
   .status.paused { color: #b00; font-weight: 600; }
+  .hint { font-size: 12px; color: #678; margin: 0 0 10px; }
+  .out { font-size: 13px; color: #234; min-height: 1.2em; margin-top: 8px; }
+  .out.paused { color: #b00; font-weight: 600; }
+  .challenge { background: #fff; border: 1px solid #c5d6ea; border-radius: 8px; padding: 12px 14px; margin: 10px 0; }
+  .pause-banner {
+    display: none; margin: 10px 0 0; padding: 10px 12px; border-radius: 6px;
+    background: #b00; color: #fff; font-weight: 700; font-size: 14px; letter-spacing: .02em;
+  }
+  body.is-paused { background: #ffd6d6; }
+  body.is-paused .pause-banner { display: block; }
+  body.is-paused .wrap > h1::after { content: ' · GEPAUZEERD'; color: #b00; font-size: 14px; }
   svg { display: block; margin: 14px 0; }
   .tile { cursor: pointer; }
   .tile rect { fill: #fff; stroke: #8ab; stroke-width: 2; }
   .tile.selected rect { fill: #1f6feb; stroke: #1f6feb; }
   .tile text { font-size: 15px; fill: #123; pointer-events: none; }
   .tile.selected text { fill: #fff; }
-  .row { display: flex; gap: 10px; align-items: center; }
-  .btn { cursor: pointer; user-select: none; padding: 8px 14px; border-radius: 6px; background: #123; color: #fff; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn { cursor: pointer; user-select: none; padding: 8px 14px; border-radius: 6px; background: #123; color: #fff; border: 0; font: inherit; }
   .btn.off { opacity: .4; }
+  button.btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn[aria-pressed="true"] { background: #1f6feb; }
   #forecast { margin-top: 16px; font-size: 20px; min-height: 28px; }
   #log { margin-top: 12px; font-size: 12px; color: #678; }
+  .radio-opt { position: relative; width: 200px; height: 32px; }
+  .radio-opt input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+  .cover-wrap { position: relative; width: 180px; height: 40px; }
+  .cover-draw { position: absolute; inset: 0; background: #1f6feb; color: #fff; display: flex; align-items: center; justify-content: center; border-radius: 6px; pointer-events: none; }
+  .cover-hit { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; margin: 0; border: 0; padding: 0; }
+  #playCanvas { display: block; border: 1px solid #8ab; border-radius: 6px; cursor: crosshair; }
+  #nestedFrame { width: 100%; height: 90px; border: 1px solid #8ab; border-radius: 6px; background: #f7fbff; }
+  .frames iframe { display: block; width: 100%; height: 46px; border: 1px solid #8ab; border-radius: 6px; margin: 6px 0; background: #f7fbff; }
+  .zero { width: 0; height: 0; overflow: hidden; padding: 0; border: 0; margin: 0; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Weerapp</h1>
   <div id="clock" class="status">Looptijd: 0.0 s</div>
+  <div id="pauseBanner" class="pause-banner" role="status" aria-live="polite">GEPAUZEERD — focus of zichtbaarheid kwijt</div>
 
   <!-- City picker drawn as SVG: no roles, no buttons. Only trusted pointer input works,
        like many custom players. -->
@@ -55,14 +80,146 @@
 
   <div id="forecast">Kies een stad.</div>
   <div id="log"></div>
+
+  <h2>Uitdagingen</h2>
+  <p class="hint">Extra gevallen om snapshot, act, click_xy, hidden en nested frames te testen. Geen toets: kies alleen wat jij noemt.</p>
+
+  <section class="challenge" id="chal-buttons">
+    <h3>Knoppen</h3>
+    <div class="row">
+      <button type="button" class="btn" id="plainBtn">Gewone knop</button>
+      <button type="button" class="btn" id="disabledBtn" disabled>Uitgeschakeld</button>
+      <button type="button" class="btn" id="toggleBtn" aria-pressed="false">Toggle</button>
+      <div class="btn" id="trustedBtn">Alleen echt</div>
+      <div class="btn" id="dblBtn">Dubbelklik</div>
+    </div>
+    <div id="btnOut" class="out">Nog geen knopactie.</div>
+  </section>
+
+  <section class="challenge" id="chal-radios">
+    <h3>Radiogroep (onzichtbare laag)</h3>
+    <p class="hint">Getekende opties met opacity-0 radios erover — zoals Storyline-antwoordopties.</p>
+    <div class="row" id="radioRow"></div>
+    <div id="radioOut" class="out">Geen optie gekozen.</div>
+  </section>
+
+  <section class="challenge" id="chal-form">
+    <h3>Formulier</h3>
+    <div class="row">
+      <label>Regio
+        <select id="region" aria-label="Regio">
+          <option value="">—</option>
+          <option value="noord">Noord</option>
+          <option value="midden">Midden</option>
+          <option value="zuid">Zuid</option>
+        </select>
+      </label>
+      <label>Wind <input type="range" id="wind" aria-label="Wind" min="0" max="10" value="3"></label>
+      <button type="button" class="btn" id="formSubmit">Toon samenvatting</button>
+    </div>
+    <div id="formOut" class="out">Nog geen samenvatting.</div>
+  </section>
+
+  <section class="challenge" id="chal-hidden">
+    <h3>Verborgen targets</h3>
+    <p class="hint">Alleen zichtbaar in snapshot met hidden=true (display / visibility / geen afmeting).</p>
+    <button type="button" id="hiddenDisplay" style="display:none">Verborgen display</button>
+    <button type="button" id="hiddenVisibility" style="visibility:hidden">Verborgen visibility</button>
+    <button type="button" id="hiddenZero" class="zero" aria-label="Nul-afmeting">Nul-afmeting</button>
+    <div id="hiddenOut" class="out">Nog geen verborgen actie.</div>
+  </section>
+
+  <section class="challenge" id="chal-covered">
+    <h3>Bedekt / getekende laag</h3>
+    <p class="hint">Zichtbare tekening; echte knop is opacity-0 eroverheen (coveredOrInvisible-pad).</p>
+    <div class="cover-wrap">
+      <div class="cover-draw" aria-hidden="true">Verborgen actie</div>
+      <button type="button" class="cover-hit" id="coveredBtn" aria-label="Verborgen actie"></button>
+    </div>
+    <div id="coveredOut" class="out">Nog niet geactiveerd.</div>
+  </section>
+
+  <section class="challenge" id="chal-canvas">
+    <h3>Canvas (geen DOM-controls)</h3>
+    <p class="hint">Alleen screenshot + click_xy. Links = zee, rechts = land.</p>
+    <canvas id="playCanvas" width="280" height="80" aria-label="Weerkaart canvas"></canvas>
+    <div id="canvasOut" class="out">Nog geen canvasklik.</div>
+  </section>
+
+  <section class="challenge" id="chal-shadow">
+    <h3>Shadow DOM</h3>
+    <p class="hint">Open shadow is uitleesbaar; closed shadow niet.</p>
+    <div class="row">
+      <div id="openHost"></div>
+      <div id="closedHost"></div>
+    </div>
+    <div id="shadowOut" class="out">Nog geen shadow-actie.</div>
+  </section>
+
+  <section class="challenge" id="chal-nested">
+    <h3>Nested iframe</h3>
+    <p class="hint">Same-origin kind-frame onder de OOPIF-weerapp.</p>
+    <iframe id="nestedFrame" src="/nested.html" title="Nested demo"></iframe>
+    <div id="nestedOut" class="out">Nog geen nested klik.</div>
+  </section>
+
+  <section class="challenge" id="chal-frames">
+    <h3>Soorten iframes</h3>
+    <p class="hint">srcdoc, sandbox (met en zonder scripts), data:, about:blank met document.write, iframe in shadow DOM en een iframe die later verschijnt.</p>
+    <div class="frames">
+      <iframe id="fSrcdoc" title="srcdoc" srcdoc="<!doctype html><body style='margin:0;font:13px system-ui;padding:8px 12px'><button type='button' id='b' onclick='if(event.isTrusted)document.getElementById(&quot;o&quot;).textContent=&quot;Geklikt: In srcdoc.&quot;'>In srcdoc</button> <span id='o'>Nog niet geklikt.</span></body>"></iframe>
+      <iframe id="fSandbox" title="sandbox met scripts" sandbox="allow-scripts" src="/kind.html?label=In%20sandbox"></iframe>
+      <iframe id="fNoScript" title="sandbox zonder scripts" sandbox="" src="/kind-noscript.html"></iframe>
+      <iframe id="fData" title="data-url" src="data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Cbody%20style%3D%22margin%3A0%3Bfont%3A13px%20system-ui%3Bpadding%3A8px%2012px%22%3E%3Cbutton%20type%3D%22button%22%20onclick%3D%22if(event.isTrusted)document.getElementById('o').textContent%3D'Geklikt%3A%20In%20data.'%22%3EIn%20data%3C%2Fbutton%3E%20%3Cspan%20id%3D%22o%22%3ENog%20niet%20geklikt.%3C%2Fspan%3E%3C%2Fbody%3E"></iframe>
+      <iframe id="fBlank" title="about:blank"></iframe>
+      <div id="frameHost"></div>
+      <div id="lateSlot"></div>
+    </div>
+  </section>
+
+  <section class="challenge" id="chal-dialog">
+    <h3>Dialoog</h3>
+    <button type="button" class="btn" id="openDialog">Open dialoog</button>
+    <div id="dialogOut" class="out">Dialoog nog niet bevestigd.</div>
+    <dialog id="demoDialog">
+      <p>Bevestig de demo-actie.</p>
+      <form method="dialog" class="row">
+        <button type="submit" class="btn" id="dialogConfirm" value="ok">Bevestigen</button>
+        <button type="submit" class="btn" value="cancel" style="background:#678">Annuleren</button>
+      </form>
+    </dialog>
+  </section>
+
+  <section class="challenge" id="chal-pause">
+    <h3>Pauze bij handelen buiten de iframe</h3>
+    <p class="hint">Zoals games/players: als je buiten de iframe handelt (blur) of de tab verbergt, pauzeert de inhoud. Zet de schakelaar uit om die reactie te negeren.</p>
+    <div class="row">
+      <label>
+        <input type="checkbox" id="pauseOnBlur" checked aria-label="Pauze bij focusverlies">
+        Pauze bij focusverlies
+      </label>
+    </div>
+    <div id="pauseOut" class="out">Nog geen pauze-reactie.</div>
+  </section>
 </div>
 <script>
   const DATA = {
     Amsterdam: [11, 13, 9], Utrecht: [12, 14, 10], Rotterdam: [10, 12, 11], Groningen: [8, 9, 7],
   };
   const DAYS = ['vandaag', 'morgen', 'overmorgen'];
-  const state = { city: null, day: 0, paused: false };
-  window.__demo = { ignored: 0, pauses: 0, state };
+  const state = { city: null, day: 0, paused: false, pauseOnBlur: true };
+  window.__demo = {
+    ignored: 0,
+    pauses: 0,
+    lastPauseReason: null,
+    state,
+    radio: null,
+    canvasHits: 0,
+    canvasZone: null,
+    nestedClicks: 0,
+    coveredClicks: 0,
+    btnAction: null,
+  };
 
   const svg = document.getElementById('tiles');
   const NS = 'http://www.w3.org/2000/svg';
@@ -117,15 +274,189 @@
     dot.setAttribute('fill', dot.getAttribute('fill') === '#ccc' ? '#f5a623' : '#ccc');
   });
 
-  // The app pauses as soon as it loses focus or becomes hidden, like many games/players.
-  const clock = document.getElementById('clock');
-  let elapsed = 0, last = performance.now();
-  function pause(reason) {
-    if (state.paused) return;
-    state.paused = true; window.__demo.pauses++;
-    clock.textContent = `Gepauzeerd (${reason})`; clock.classList.add('paused');
+  // --- Uitdagingen ---
+  const setBtn = (msg) => {
+    window.__demo.btnAction = msg;
+    document.getElementById('btnOut').textContent = msg;
+  };
+  document.getElementById('plainBtn').addEventListener('click', () => setBtn('Gewone knop geklikt.'));
+  document.getElementById('toggleBtn').addEventListener('click', (e) => {
+    const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+    e.currentTarget.setAttribute('aria-pressed', String(on));
+    setBtn(on ? 'Toggle aan.' : 'Toggle uit.');
+  });
+  document.getElementById('trustedBtn').addEventListener('pointerdown', (e) => {
+    if (!trusted(e)) return;
+    setBtn('Alleen-echt knop geklikt.');
+  });
+  document.getElementById('dblBtn').addEventListener('dblclick', (e) => {
+    if (!trusted(e)) return;
+    setBtn('Dubbelklik ontvangen.');
+  });
+
+  const RADIO_OPTS = [
+    { id: 'optA', label: 'Zonnig' },
+    { id: 'optB', label: 'Bewolkt' },
+    { id: 'optC', label: 'Regen' },
+  ];
+  const radioRow = document.getElementById('radioRow');
+  RADIO_OPTS.forEach((opt) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'radio-opt';
+    wrap.innerHTML = `
+      <svg width="200" height="32" aria-hidden="true">
+        <circle class="dot" cx="14" cy="16" r="8" fill="#fff" stroke="#123" stroke-width="2"/>
+        <text x="30" y="21" font-size="14">${opt.label}</text>
+      </svg>
+      <input type="radio" name="sky" id="${opt.id}" aria-label="${opt.label}" value="${opt.label}">`;
+    radioRow.append(wrap);
+  });
+  radioRow.addEventListener('change', (e) => {
+    const input = e.target;
+    if (input.type !== 'radio') return;
+    window.__demo.radio = input.value;
+    document.getElementById('radioOut').textContent = `Gekozen: ${input.value}`;
+    radioRow.querySelectorAll('.dot').forEach((c) => c.setAttribute('fill', '#fff'));
+    input.previousElementSibling.querySelector('.dot').setAttribute('fill', '#1f6feb');
+  });
+
+  document.getElementById('formSubmit').addEventListener('click', () => {
+    const region = document.getElementById('region').value || 'geen';
+    const wind = document.getElementById('wind').value;
+    document.getElementById('formOut').textContent = `Samenvatting: regio ${region}, wind ${wind}.`;
+  });
+
+  const setHidden = (msg) => { document.getElementById('hiddenOut').textContent = msg; };
+  document.getElementById('hiddenDisplay').addEventListener('click', () => setHidden('Display-knop geactiveerd.'));
+  document.getElementById('hiddenVisibility').addEventListener('click', () => setHidden('Visibility-knop geactiveerd.'));
+  document.getElementById('hiddenZero').addEventListener('click', () => setHidden('Nul-afmeting geactiveerd.'));
+
+  document.getElementById('coveredBtn').addEventListener('click', () => {
+    window.__demo.coveredClicks++;
+    document.getElementById('coveredOut').textContent = `Verborgen actie geactiveerd (${window.__demo.coveredClicks}).`;
+  });
+
+  const canvas = document.getElementById('playCanvas');
+  const ctx = canvas.getContext('2d');
+  function drawCanvas(highlight) {
+    ctx.fillStyle = '#3a7ca5';
+    ctx.fillRect(0, 0, 140, 80);
+    ctx.fillStyle = '#6a994e';
+    ctx.fillRect(140, 0, 140, 80);
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px system-ui';
+    ctx.fillText('Zee', 50, 44);
+    ctx.fillText('Land', 190, 44);
+    if (highlight === 'zee') {
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(2, 2, 136, 76);
+    } else if (highlight === 'land') {
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(142, 2, 136, 76);
+    }
   }
-  function resume() { state.paused = false; last = performance.now(); clock.classList.remove('paused'); }
+  drawCanvas();
+  canvas.addEventListener('pointerdown', (e) => {
+    if (!trusted(e)) return;
+    const x = e.offsetX;
+    const zone = x < 140 ? 'zee' : 'land';
+    window.__demo.canvasHits++;
+    window.__demo.canvasZone = zone;
+    drawCanvas(zone);
+    document.getElementById('canvasOut').textContent = `Canvas: ${zone} (hit ${window.__demo.canvasHits}).`;
+  });
+
+  const openHost = document.getElementById('openHost');
+  const openShadow = openHost.attachShadow({ mode: 'open' });
+  openShadow.innerHTML = `<button type="button" class="btn" style="padding:8px 14px;border-radius:6px;background:#123;color:#fff;border:0;font:inherit;cursor:pointer">Open shadow</button>`;
+  openShadow.querySelector('button').addEventListener('click', () => {
+    document.getElementById('shadowOut').textContent = 'Open shadow geklikt.';
+  });
+  const closedHost = document.getElementById('closedHost');
+  const closedShadow = closedHost.attachShadow({ mode: 'closed' });
+  closedShadow.innerHTML = `<button type="button" style="padding:8px 14px;border-radius:6px;background:#678;color:#fff;border:0;font:inherit;cursor:pointer">Closed shadow</button>`;
+  closedShadow.querySelector('button').addEventListener('click', () => {
+    document.getElementById('shadowOut').textContent = 'Closed shadow geklikt (handmatig).';
+  });
+
+  window.addEventListener('message', (e) => {
+    if (!e.data || e.data.type !== 'nested-click') return;
+    window.__demo.nestedClicks++;
+    document.getElementById('nestedOut').textContent = `Nested klik ontvangen (${window.__demo.nestedClicks}).`;
+  });
+
+  // about:blank frame filled by its parent (same origin, scripts run in the parent's world).
+  const blankDoc = document.getElementById('fBlank').contentDocument;
+  blankDoc.open();
+  blankDoc.write(`<!doctype html><body style="margin:0;font:13px system-ui;padding:8px 12px">
+    <button type="button" id="b">In about:blank</button> <span id="o">Nog niet geklikt.</span></body>`);
+  blankDoc.close();
+  blankDoc.getElementById('b').addEventListener('click', (e) => {
+    if (e.isTrusted) blankDoc.getElementById('o').textContent = 'Geklikt: In about:blank.';
+  });
+  // An iframe that lives inside an open shadow root.
+  const frameShadow = document.getElementById('frameHost').attachShadow({ mode: 'open' });
+  frameShadow.innerHTML = `<style>iframe{display:block;width:100%;height:46px;border:1px solid #8ab;border-radius:6px;margin:6px 0}</style>
+    <iframe title="in shadow" src="/kind.html?label=In%20shadow-iframe"></iframe>`;
+  // An iframe that only appears after the page has loaded (e.g. a lazy player).
+  setTimeout(() => {
+    const late = document.createElement('iframe');
+    late.title = 'later geladen';
+    late.src = '/kind.html?label=Later%20geladen';
+    document.getElementById('lateSlot').append(late);
+  }, 1000);
+
+  const dialog = document.getElementById('demoDialog');
+  document.getElementById('openDialog').addEventListener('click', () => dialog.showModal());
+  dialog.addEventListener('close', () => {
+    if (dialog.returnValue === 'ok') {
+      document.getElementById('dialogOut').textContent = 'Dialoog bevestigd.';
+    }
+  });
+
+  // The app can pause as soon as it loses focus or becomes hidden, like many games/players.
+  // #chal-pause toggles that reaction so you can compare with/without it.
+  const clock = document.getElementById('clock');
+  const pauseBanner = document.getElementById('pauseBanner');
+  const pauseOut = document.getElementById('pauseOut');
+  const pauseOnBlur = document.getElementById('pauseOnBlur');
+  let elapsed = 0, last = performance.now();
+  function setPauseOut(msg, paused) {
+    pauseOut.textContent = msg;
+    pauseOut.classList.toggle('paused', !!paused);
+  }
+  function pause(reason) {
+    if (!state.pauseOnBlur || state.paused) return;
+    state.paused = true;
+    window.__demo.pauses++;
+    window.__demo.lastPauseReason = reason;
+    clock.textContent = `Gepauzeerd (${reason}) · reactie ${window.__demo.pauses}`;
+    clock.classList.add('paused');
+    document.body.classList.add('is-paused');
+    pauseBanner.textContent = `GEPAUZEERD — ${reason} (reactie ${window.__demo.pauses})`;
+    setPauseOut(`Pauze-reactie opgetreden: ${reason} (${window.__demo.pauses}).`, true);
+  }
+  function resume() {
+    if (!state.paused) return;
+    state.paused = false;
+    last = performance.now();
+    clock.classList.remove('paused');
+    document.body.classList.remove('is-paused');
+    if (window.__demo.lastPauseReason) {
+      setPauseOut(`Hervat na: ${window.__demo.lastPauseReason} (${window.__demo.pauses} reacties).`, false);
+    }
+  }
+  pauseOnBlur.addEventListener('change', () => {
+    state.pauseOnBlur = pauseOnBlur.checked;
+    if (!state.pauseOnBlur) {
+      resume();
+      setPauseOut('Pauze-reactie uit: blur/verborgen wordt genegeerd.', false);
+    } else {
+      setPauseOut('Pauze-reactie aan: blur/verborgen pauzeert de inhoud.', false);
+    }
+  });
   window.addEventListener('blur', () => pause('focus kwijt'));
   window.addEventListener('focus', resume);
   document.addEventListener('visibilitychange', () => document.hidden ? pause('verborgen') : resume());

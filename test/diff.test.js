@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diffFingerprints, volatileKeys } from '../src/verify.js';
+import { diffFingerprints, volatileKeys, classifyFrameSwitches, isPause } from '../src/verify.js';
 import { parseRef } from '../src/snapshot.js';
 
 const fp = (lines, states = {}, extra = {}) => ({
@@ -54,4 +54,17 @@ test('focus and mutation counts alone do not count as a change', () => {
   const d = diffFingerprints({ 0: fp(['x']) }, { 0: fp(['x'], {}, { mutations: 5 }) });
   assert.equal(d.changed, false);
   assert.ok(d.changes[0].includes('5 DOM-wijzigingen'));
+});
+
+test('a blur followed by focus in another frame of the tab is a frame switch, not a pause', () => {
+  const evs = classifyFrameSwitches([
+    { frame: 'f4', type: 'window-blur', t: 1000 },
+    { frame: 'f6', type: 'window-focus', t: 1003 },
+    { frame: 'f2', type: 'window-blur', t: 5000 },
+  ]);
+  assert.equal(evs[0].type, 'focus-to-frame');
+  assert.equal(evs[0].to, 'f6');
+  assert.equal(isPause(evs[0]), false);
+  assert.equal(evs[2].type, 'window-blur');
+  assert.equal(isPause(evs[2]), true);
 });

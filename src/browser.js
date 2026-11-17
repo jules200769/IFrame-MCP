@@ -1,10 +1,22 @@
 // Connection to a running Chrome over CDP, with frame bookkeeping and keep-alive settings.
 import { chromium } from 'playwright-core';
 import { INJECTED_SOURCE, AGENT_VERSION } from './injected.js';
+import { readDevToolsActivePort, chromeUserDataDir, ENABLE_HINT } from './endpoint.js';
 
+// Two kinds of browser:
+// - "dedicated": the Chrome started by `npm run chrome` (own profile, keep-alive flags).
+//   Every tab gets the helper, and the connection is retried automatically.
+// - "user": the user's everyday Chrome, reached via chrome://inspect/#remote-debugging.
+//   Only the tab the agent works in is touched, and because Chrome asks for permission on
+//   every connection, reconnecting is manual unless reconnect: 'auto' is passed.
 export class Session {
-  constructor({ cdpUrl = 'http://127.0.0.1:9222' } = {}) {
+  constructor({ cdpUrl = 'http://127.0.0.1:9222', browser = 'dedicated', userDataDir, reconnect } = {}) {
+    if (!['dedicated', 'user'].includes(browser)) throw new Error(`Onbekende browser "${browser}". Kies dedicated of user.`);
     this.cdpUrl = cdpUrl;
+    this.kind = browser;
+    this.userDataDir = userDataDir;
+    this.reconnect = reconnect || (browser === 'user' ? 'manual' : 'auto');
+    this.attempted = false;
     this.browser = null;
     this.context = null;
     this.page = null;
@@ -16,28 +28,66 @@ export class Session {
     this.lastActionAt = Date.now();
   }
 
-  async connect() {
-    if (this.browser?.isConnected()) return;
-    try {
-      this.browser = await chromium.connectOverCDP(this.cdpUrl, { timeout: 5000 });
-    } catch (e) {
-      throw new Error(`Geen Chrome op ${this.cdpUrl}. Start eerst: npm run chrome. (${e.message.split('\n')[0]})`);
-    }
-    this.context = this.browser.contexts()[0];
-    await this.context.addInitScript({ content: INJECTED_SOURCE });
-    for (const p of this.context.pages()) await this.preparePage(p);
-    this.context.on('page', (p) => this.preparePage(p).catch(() => {}));
-    this.page = this.pickDefaultPage();
+  get connected() {
+    return !!this.browser?.isConnected();
   }
 
-  pickDefaultPage() {
+  // explicit: the user asked to connect (e.g. the Koppel button). In "user" mode without
+  // auto-reconnect, only the first attempt and explicit ones open Chrome's permission dialog.
+  async connect({ explicit = false } = {}) {
+    if (this.connected) return;
+    if (this.kind === 'user' && this.reconnect === 'manual' && this.attempted && !explicit) {
+      throw new Error('Je Chrome is niet gekoppeld. Klik in de buddy op "Koppel"; Chrome vraagt dan om toestemming.');
+    }
+    this.attempted = true;
+    let endpoint = this.cdpUrl;
+    if (this.kind === 'user') endpoint = readDevToolsActivePort(this.userDataDir || chromeUserDataDir()).wsEndpoint;
+    try {
+      // In "user" mode the handshake waits until the user clicks Allow in Chrome.
+      this.browser = await chromium.connectOverCDP(endpoint, { timeout: this.kind === 'user' ? 60000 : 5000 });
+    } catch (e) {
+      const why = e.message.split('\n')[0];
+      throw new Error(
+        this.kind === 'user'
+          ? `Koppelen aan je Chrome lukte niet (geweigerd, verlopen of Chrome gesloten). ${ENABLE_HINT} (${why})`
+          : `Geen Chrome op ${this.cdpUrl}. Start eerst: npm run chrome. (${why})`,
+      );
+    }
+    this.context = this.browser.contexts()[0];
+    this.frameById.clear();
+    if (this.kind === 'dedicated') {
+      await this.context.addInitScript({ content: INJECTED_SOURCE });
+      for (const p of this.context.pages()) await this.preparePage(p);
+      this.context.on('page', (p) => this.preparePage(p).catch(() => {}));
+    }
+    await this.selectPage(await this.pickDefaultPage());
+  }
+
+  async pickDefaultPage() {
     const pages = this.context.pages();
-    return pages.find((p) => /^https?:|^file:/.test(p.url())) || pages[0] || null;
+    const web = pages.filter((p) => /^https?:|^file:/.test(p.url()));
+    if (this.kind === 'user') {
+      // The tab in front (visible) is the one the user is looking at.
+      for (const p of web) {
+        if ((await p.evaluate(() => document.visibilityState).catch(() => '')) === 'visible') return p;
+      }
+    }
+    return web[0] || pages[0] || null;
+  }
+
+  // Make `page` the tab the agent works in. In "user" mode this is the only tab that gets
+  // the helper and keep-alive emulation.
+  async selectPage(page) {
+    this.page = page;
+    if (!page || this.kind !== 'user' || this.prepared.has(page)) return page;
+    await page.addInitScript({ content: INJECTED_SOURCE }).catch(() => {});
+    await this.preparePage(page);
+    return page;
   }
 
   async currentPage() {
     await this.connect();
-    if (!this.page || this.page.isClosed()) this.page = this.pickDefaultPage() || (await this.context.newPage());
+    if (!this.page || this.page.isClosed()) await this.selectPage((await this.pickDefaultPage()) || (await this.context.newPage()));
     return this.page;
   }
 
@@ -104,7 +154,7 @@ export class Session {
     const run = () =>
       frame.evaluate(
         ([m, a, ver]) =>
-          window.__iframeAgent && window.__iframeAgent.version === ver
+          window.__iframeAgent && window.__iframeAgent.version === ver && window.__iframeAgent.alive()
             ? { ok: true, v: window.__iframeAgent[m](a) }
             : { ok: false },
         [method, arg, AGENT_VERSION],
@@ -135,6 +185,53 @@ export class Session {
     const box = el && (await el.boundingBox().catch(() => null));
     await el?.dispose();
     return box || null;
+  }
+
+  // Buttons inside a closed shadow root are invisible to page script. CDP still
+  // sees them; resolve each node and let the helper adopt the real element.
+  async closedShadowItems(frame, { hidden = false } = {}) {
+    let cdp;
+    let detach = false;
+    try {
+      cdp = await this.context.newCDPSession(frame);
+      detach = true;
+    } catch {
+      if (frame.parentFrame()) return [];
+      cdp = await this.cdp();
+    }
+    try {
+      const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+      const ids = [];
+      const walk = (node, closed) => {
+        for (const sr of node.shadowRoots || []) walk(sr, closed || sr.shadowRootType === 'closed');
+        if (closed && node.nodeType === 1 && node.backendNodeId) ids.push(node.backendNodeId);
+        if (node.nodeName === 'IFRAME' || node.nodeName === 'FRAME') return;
+        for (const c of node.children || []) walk(c, closed);
+      };
+      walk(root, false);
+      const items = [];
+      for (const backendNodeId of ids.slice(0, 40)) {
+        const { object } = await cdp.send('DOM.resolveNode', { backendNodeId });
+        if (!object?.objectId) continue;
+        const described = await cdp.send('Runtime.callFunctionOn', {
+          objectId: object.objectId,
+          functionDeclaration: `function (hidden) {
+            const a = window.__iframeAgent;
+            return a && a.describeElement ? a.describeElement(this, hidden) : null;
+          }`,
+          arguments: [{ value: !!hidden }],
+          returnByValue: true,
+        }).catch(() => null);
+        await cdp.send('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {});
+        const item = described?.result?.value;
+        if (item) items.push({ ...item, closedShadow: true });
+      }
+      return items;
+    } catch {
+      return [];
+    } finally {
+      if (detach) await cdp.detach().catch(() => {});
+    }
   }
 
   async cdp() {
