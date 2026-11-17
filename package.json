@@ -1,0 +1,18 @@
+{
+  "name": "iframe-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP-server waarmee een agent iframe-apps in Chrome kan zien, bedienen en controleren.",
+  "type": "module",
+  "scripts": {
+    "chrome": "node scripts/start-chrome.js",
+    "demo": "node demo/serve.js",
+    "mcp": "node src/server.js",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "playwright-core": "^1.65.1",
+    "zod": "^4.6.7"
+  }
+}

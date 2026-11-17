@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "iframe-agent": {
+      "command": "node",
+      "args": ["src/server.js"],
+      "env": { "CDP_URL": "http://127.0.0.1:9222" }
+    }
+  }
+}

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Weerapp</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #eaf4ff; color: #123; }
+  .wrap { padding: 16px 20px; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .status { font-size: 13px; color: #456; }
+  .status.paused { color: #b00; font-weight: 600; }
+  svg { display: block; margin: 14px 0; }
+  .tile { cursor: pointer; }
+  .tile rect { fill: #fff; stroke: #8ab; stroke-width: 2; }
+  .tile.selected rect { fill: #1f6feb; stroke: #1f6feb; }
+  .tile text { font-size: 15px; fill: #123; pointer-events: none; }
+  .tile.selected text { fill: #fff; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .btn { cursor: pointer; user-select: none; padding: 8px 14px; border-radius: 6px; background: #123; color: #fff; }
+  .btn.off { opacity: .4; }
+  #forecast { margin-top: 16px; font-size: 20px; min-height: 28px; }
+  #log { margin-top: 12px; font-size: 12px; color: #678; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Weerapp</h1>
+  <div id="clock" class="status">Looptijd: 0.0 s</div>
+
+  <!-- City picker drawn as SVG: no roles, no buttons. Only trusted pointer input works,
+       like many custom players. -->
+  <svg id="tiles" width="560" height="60"></svg>
+
+  <div class="row">
+    <div class="btn" id="next">Volgende dag</div>
+    <input id="search" placeholder="Zoek een stad" aria-label="Zoek een stad">
+  </div>
+
+  <!-- Drawn checkbox with an invisible accessibility layer on top (like Storyline):
+       only the hidden input is a real control; the visible box changes colour only. -->
+  <div class="row" style="margin-top:12px">
+    <div style="position:relative;width:210px;height:30px">
+      <svg width="210" height="30" aria-hidden="true">
+        <rect id="feelbox" x="2" y="5" width="20" height="20" rx="3" fill="#fff" stroke="#123" stroke-width="2"/>
+        <text x="32" y="21" font-size="14">Gevoelstemperatuur</text>
+      </svg>
+      <input type="checkbox" id="feelacc" aria-label="Gevoelstemperatuur"
+             style="position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer">
+    </div>
+    <!-- Pure SVG toggle without any accessible element: only its colour changes. -->
+    <svg id="fav" width="30" height="30" style="cursor:pointer"><circle id="favdot" cx="15" cy="15" r="11" fill="#ccc"/></svg>
+    <!-- Opens a new tab, like a "Theorie" button that opens a PDF. -->
+    <a href="/weerkaart" target="_blank">Weerkaart</a>
+  </div>
+
+  <div id="forecast">Kies een stad.</div>
+  <div id="log"></div>
+</div>
+<script>
+  const DATA = {
+    Amsterdam: [11, 13, 9], Utrecht: [12, 14, 10], Rotterdam: [10, 12, 11], Groningen: [8, 9, 7],
+  };
+  const DAYS = ['vandaag', 'morgen', 'overmorgen'];
+  const state = { city: null, day: 0, paused: false };
+  window.__demo = { ignored: 0, pauses: 0, state };
+
+  const svg = document.getElementById('tiles');
+  const NS = 'http://www.w3.org/2000/svg';
+  Object.keys(DATA).forEach((city, i) => {
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'tile');
+    g.dataset.city = city;
+    g.setAttribute('transform', `translate(${i * 135},5)`);
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('width', 125); r.setAttribute('height', 46); r.setAttribute('rx', 8);
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', 62); t.setAttribute('y', 29); t.setAttribute('text-anchor', 'middle');
+    t.textContent = city;
+    g.append(r, t);
+    svg.append(g);
+  });
+
+  const log = (msg) => { document.getElementById('log').textContent = msg; };
+  const trusted = (e) => {
+    if (!e.isTrusted) { window.__demo.ignored++; log('Niet-vertrouwde invoer genegeerd.'); return false; }
+    return true;
+  };
+
+  function render() {
+    document.querySelectorAll('.tile').forEach((g) => g.classList.toggle('selected', g.dataset.city === state.city));
+    document.getElementById('next').classList.toggle('off', !state.city);
+    document.getElementById('forecast').textContent = state.city
+      ? `${state.city} ${DAYS[state.day]}: ${DATA[state.city][state.day]}°C`
+      : 'Kies een stad.';
+  }
+
+  svg.addEventListener('pointerdown', (e) => {
+    const g = e.target.closest('.tile');
+    if (!g || !trusted(e)) return;
+    state.city = g.dataset.city; state.day = 0; log(''); render();
+  });
+  document.getElementById('next').addEventListener('pointerdown', (e) => {
+    if (!trusted(e) || !state.city) return;
+    state.day = (state.day + 1) % DAYS.length; render();
+  });
+  document.getElementById('search').addEventListener('input', (e) => {
+    const hit = Object.keys(DATA).find((c) => c.toLowerCase() === e.target.value.trim().toLowerCase());
+    if (hit) { state.city = hit; state.day = 0; render(); }
+  });
+
+  document.getElementById('feelacc').addEventListener('change', (e) => {
+    document.getElementById('feelbox').setAttribute('fill', e.target.checked ? '#1f6feb' : '#fff');
+  });
+  document.getElementById('fav').addEventListener('pointerdown', (e) => {
+    if (!trusted(e)) return;
+    const dot = document.getElementById('favdot');
+    dot.setAttribute('fill', dot.getAttribute('fill') === '#ccc' ? '#f5a623' : '#ccc');
+  });
+
+  // The app pauses as soon as it loses focus or becomes hidden, like many games/players.
+  const clock = document.getElementById('clock');
+  let elapsed = 0, last = performance.now();
+  function pause(reason) {
+    if (state.paused) return;
+    state.paused = true; window.__demo.pauses++;
+    clock.textContent = `Gepauzeerd (${reason})`; clock.classList.add('paused');
+  }
+  function resume() { state.paused = false; last = performance.now(); clock.classList.remove('paused'); }
+  window.addEventListener('blur', () => pause('focus kwijt'));
+  window.addEventListener('focus', resume);
+  document.addEventListener('visibilitychange', () => document.hidden ? pause('verborgen') : resume());
+  (function tick(now) {
+    if (!state.paused) { elapsed += now - last; clock.textContent = `Looptijd: ${(elapsed / 1000).toFixed(1)} s`; }
+    last = now;
+    requestAnimationFrame(tick);
+  })(performance.now());
+
+  render();
+</script>
+</body>
+</html>
